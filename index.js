@@ -1,6 +1,7 @@
 const mqtt = require("mqtt");
 const consola = require("consola");
 const Influx = require("influx");
+require('dotenv').config()
 
 const influxOptions = {
   host: process.env.INFLUX_HOST,
@@ -11,10 +12,12 @@ const influxOptions = {
 };
 
 const mqttOptions = {
-  host: process.env.MQTT_HOST,
+  // clientId: "data_db",
+  clean: true,
+  // host: process.env.MQTT_HOST,
   username: process.env.MQTT_USERNAME,
   password: process.env.MQTT_PASSWORD,
-  protocol: process.env.MQTT_PROTOCOL || "tls",
+  // protocol: process.env.MQTT_PROTOCOL || "tls",
 };
 
 const influx = new Influx.InfluxDB({
@@ -31,19 +34,90 @@ const influx = new Influx.InfluxDB({
 });
 
 const processMessage = (topic, message) => {
-  const data = [];
 
-  Object.keys(message).forEach((measurement) => {
-    const value = message[measurement];
-    data.push({
-      measurement,
-      tags: { topic },
-      fields: { value },
-    });
-  });
+  const messageString = message.toString();
+  let parsedMessage = JSON.parse(messageString);
 
-  return data;
+  const measurement = parsedMessage.measurement
+  // consola.log(measurement)
+  delete parsedMessage.measurement;
+  // consola.log(parsedMessage)
+
+  influx.writePoints(
+    [{
+      measurement: measurement,
+      // tags: { host: 'box1.example.com' },
+      fields: parsedMessage,
+      // timestamp: getLastRecordedTime(),
+    }],
+    {
+      // database: 'my_db',
+      // retentionPolicy: '30d',
+      precision: 's'
+    }
+  )
+    .catch((err) => {
+      consola.error(`Error saving data to InfluxDB! ${err.stack}`);
+    })
 };
+
+function replace(myObj) {
+  Object.keys(myObj).forEach(function (key) {
+    typeof myObj[key] == 'object' ? replace(myObj[key]) : myObj[key] = Number(myObj[key]);
+  });
+}
+
+const processMessage_CNC = (topic, message) => {
+  if (message) {
+
+    const messageString = message.toString();
+    let parsedMessage = JSON.parse(messageString);
+
+    // consola.log(parsedMessage)
+    const measurement = parsedMessage.device
+    const ts = parsedMessage.ts
+    // consola.log(measurement)
+    delete parsedMessage.device;
+    // consola.log(parsedMessage)
+    let fields = parsedMessage.data
+    replace(fields)
+    consola.log(fields)
+
+    influx.writePoints(
+      [{
+        timestamp: ts,
+        measurement: measurement,
+        // tags: { host: 'box1.example.com' },
+        fields: fields,
+      }],
+      {
+        // database: 'my_db',
+        // retentionPolicy: '30d',
+        precision: 's'
+      }
+    )
+      .catch((err) => {
+        consola.error(`Error saving data to InfluxDB! ${err.stack}`);
+      })
+  }
+};
+
+// const processMessage = (topic, message) => {
+//   const data = [];
+
+//   Object.keys(message).forEach((measurement) => {
+//     console.log(measurement)
+//     const value = message[measurement];
+//     console.log(value)
+//     data.push({
+//       measurement,
+//       tags: { topic },
+//       fields: { value },
+//     });
+//   });
+
+//   return data;
+// };
 
 const topics = process.env.MQTT_TOPICS.split(",");
 
@@ -51,7 +125,7 @@ if (!topics.length) {
   consola.error("No topics to subscribe to");
 }
 
-const client = mqtt.connect(mqttOptions);
+const client = mqtt.connect(process.env.MQTT_HOST, mqttOptions);
 
 client.subscribe(topics);
 
@@ -61,19 +135,17 @@ client.on("connect", () => {
 
 client.on("offline", () => {
   consola.warn("MQTT broker connection failed");
-  process.exit(1);
+  // process.exit(1);
 });
 
 client.on("error", (error) => {
   consola.error("MQTT Client Error:", error);
-  process.exit(1);
+  // process.exit(1);
 });
 
+// { "measurement":"mac_id", "temperature": 21.1,"humidity": 37, "ph": 10, "ec": 54, "tds": 41, "water_pump_status": 0, "nutrition_pump_status": 0, "ph_down_pump_status": 0, "light_status": 0, "light_rgb": "#333333", "light_intensity": 80 }
 client.on("message", (topic, message) => {
-  const messageString = message.toString();
-  const parsedMessage = JSON.parse(messageString);
+  consola.log("-[ message received: " + message + " at topic " + topic);
 
-  influx.writePoints(processMessage(topic, parsedMessage)).catch((err) => {
-    consola.error(`Error saving data to InfluxDB! ${err.stack}`);
-  });
+  processMessage_CNC(topic, message)
 });
